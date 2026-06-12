@@ -1,6 +1,9 @@
 @tool
 extends EditorPlugin
 
+# CITATION: Godot EditorPlugin documentation – https://docs.godotengine.org/en/stable/classes/class_editorplugin.html
+# CITATION: OS.execute – https://docs.godotengine.org/en/stable/classes/class_os.html#class-os-method-execute
+
 var repair_button: Button
 
 func _enter_tree():
@@ -35,12 +38,10 @@ func _repair_current_script():
         editor.get_base_control().show_message("Repair script missing inside addon.")
         return
 
-    # Run the Python script on the current file
     var output = []
     var exit_code = OS.execute("python3", [repair_script, path], output, true)
 
     if exit_code == 0:
-        # Reload the script from disk to show changes
         script.reload_from_disk()
         editor.get_base_control().show_message("✅ Script repaired successfully.")
     else:
