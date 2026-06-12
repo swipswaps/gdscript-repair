@@ -5,33 +5,41 @@ A non‑breaking, safe plugin for Godot 4 that automatically fixes:
 - **Orphaned indented lines** (code outside any function)
 - **Mixed indentation** (tabs → 4 spaces)
 
-It creates timestamped backups and verifies syntax with `gdparse` before overwriting.  
+It creates timestamped backups and verifies syntax with gdparse before overwriting.  
 Rolls back automatically on any failure.
 
 ## Features
 - ✅ One‑click repair from the script editor toolbar
 - ✅ Detects duplicates only if bodies are identical (safe)
 - ✅ Fixes indentation while preserving logic
-- ✅ Uses `gdtoolkit` (gdparse) for syntax verification
-- ✅ Timestamped backups (e.g., `file.gd.backup_20260612_143021`)
+- ✅ Uses gdtoolkit (gdparse) for syntax verification
+- ✅ Timestamped backups (e.g., file.gd.backup_20260612_143021)
 - ✅ Rolls back if verification fails
 
 ## Installation
 
-1. Download the `gd_repair` folder from this repository.
-2. Copy it into your Godot project’s `addons/` folder.
-3. In Godot, go to **Project → Project Settings → Plugins**.
-4. Enable **GDScript Repair (Safe)**.
+### Automatic (recommended)
+
+Run this command inside your Godot project root (where project.godot is located):
+
+bash <(curl -s https://raw.githubusercontent.com/swipswaps/gdscript-repair/master/install.sh)
+
+### Manual (fallback)
+
+1. Download the gd_repair folder from this repository.
+2. Create an addons/ folder in your Godot project root if it doesn't exist.
+3. Copy the gd_repair folder into addons/.
+4. Enable the plugin in Project → Project Settings → Plugins.
 
 ## Requirements
 
-- **Python 3.8+** with `pip` installed.
-- The plugin will automatically install `gdtoolkit` if missing (`pip install gdtoolkit==4.*`).
+- Python 3.8+ with pip installed.
+- The plugin will automatically install gdtoolkit if missing (pip install gdtoolkit==4.*).
 
 ## Usage
 
 1. Open any GDScript file in the Godot script editor.
-2. Click the **🔧 Repair Script** button in the top toolbar.
+2. Click the 🔧 Repair Script button in the top toolbar.
 3. The script is repaired, verified, and saved. A backup is created in the same folder.
 
 ## Manual command line (without plugin)
@@ -43,7 +51,7 @@ Rolls back automatically on any failure.
 - **Detector** scans for duplicate functions and orphaned indentation.
 - **Backup** is created with a timestamp.
 - **Fixer** removes identical duplicates and dedents orphaned lines.
-- **Verifier** runs `gdparse` on the repaired code.
+- **Verifier** runs gdparse on the repaired code.
 - **Rollback** restores the backup if verification fails.
 
 ## License
