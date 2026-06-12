@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # PATH: install.sh
 # PURPOSE: Safe, non‑breaking installation of GDScript Repair plugin.
-#           Works both when run locally and via `curl | bash`.
-# USAGE:   ./install.sh [/path/to/godot/project]
-#          If no path given, uses current directory.
+#           Works both locally and via `curl | bash` when project path is provided.
+# USAGE:
+#   When run locally:   ./install.sh [/path/to/godot/project]
+#   When run from pipe: bash <(curl ...) /path/to/godot/project
+#   (If already in project root, use '.' as argument)
 #
 # CITATION: Bash script best practices – https://www.gnu.org/software/bash/manual/
 # CITATION: Godot project structure – https://docs.godotengine.org/en/stable/tutorials/plugins/editor/index.html
@@ -12,29 +14,35 @@
 set -euo pipefail
 
 # ----------------------------------------------------------------------------
-# DETECTOR: Check if running from a pipe (curl | bash)
+# DETECTOR: Check if running from a pipe (curl | bash) and if argument is missing
 # ----------------------------------------------------------------------------
-# CITATION: ${BASH_SOURCE[0]} is empty or not a regular file when piped
+PIPE_MODE=false
 if [[ ! -f "${BASH_SOURCE[0]}" ]]; then
-    echo "[INFO] Detected pipe execution (curl | bash). Cloning repository to a temporary directory..."
-    
-    # Create a temporary directory
+    PIPE_MODE=true
+    echo "[INFO] Detected pipe execution (curl | bash)."
+    if [ $# -eq 0 ]; then
+        echo "[ERROR] When using pipe execution, you must provide the Godot project path as an argument."
+        echo "Example: bash <(curl -s https://raw.githubusercontent.com/swipswaps/gdscript-repair/master/install.sh) /path/to/your/godot_project"
+        echo "If you are already inside your project root, use '.' as argument:"
+        echo "  cd /path/to/your/godot_project && bash <(curl -s ...) ."
+        exit 1
+    fi
+    # Clone repository to temporary directory and re-run with the same arguments
+    echo "[INFO] Cloning repository to a temporary directory..."
     TEMP_DIR=$(mktemp -d)
-    # CITATION: git clone – https://git-scm.com/docs/git-clone
     git clone https://github.com/swipswaps/gdscript-repair.git "$TEMP_DIR"
-    # Change to the temporary directory and re‑run this script (now from a real file)
     cd "$TEMP_DIR"
-    exec bash install.sh
-    # The exec replaces the current process; code after this line never runs in pipe mode.
+    exec bash install.sh "$@"
+    # exec replaces the process; never reaches here
 fi
 
 # ----------------------------------------------------------------------------
-# GATE 0: Check that the target directory contains a Godot project
+# GATE 0: Determine target directory (first argument or current directory)
 # ----------------------------------------------------------------------------
 TARGET_DIR="${1:-$(pwd)}"
 if [ ! -f "$TARGET_DIR/project.godot" ]; then
     echo "[ERROR] No project.godot found in $TARGET_DIR"
-    echo "Please run this script from your Godot project root, or pass the path:"
+    echo "Please provide a valid Godot project directory:"
     echo "  ./install.sh /path/to/your/godot_project"
     exit 1
 fi
@@ -46,7 +54,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_SRC="$SCRIPT_DIR/gd_repair"
 if [ ! -d "$PLUGIN_SRC" ]; then
     echo "[ERROR] Cannot find gd_repair folder at $PLUGIN_SRC"
-    echo "Make sure you are running this script from the cloned repository root."
+    echo "Make sure you are running this script from the cloned repository root (or that the repository is intact)."
     exit 1
 fi
 

@@ -20,9 +20,9 @@ Rolls back automatically on any failure.
 
 ### Automatic (recommended)
 
-Run this command inside your Godot project root (where project.godot is located):
+Run this command **inside your Godot project root** (where project.godot is located):
 
-bash <(curl -s https://raw.githubusercontent.com/swipswaps/gdscript-repair/master/install.sh)
+bash <(curl -s https://raw.githubusercontent.com/swipswaps/gdscript-repair/master/install.sh) .
 
 ### Manual (fallback)
 
