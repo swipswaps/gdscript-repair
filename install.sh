@@ -1,12 +1,32 @@
 #!/usr/bin/env bash
 # PATH: install.sh
 # PURPOSE: Safe, non‑breaking installation of GDScript Repair plugin.
+#           Works both when run locally and via `curl | bash`.
 # USAGE:   ./install.sh [/path/to/godot/project]
 #          If no path given, uses current directory.
+#
 # CITATION: Bash script best practices – https://www.gnu.org/software/bash/manual/
 # CITATION: Godot project structure – https://docs.godotengine.org/en/stable/tutorials/plugins/editor/index.html
+# CITATION: Detect pipe execution – https://stackoverflow.com/questions/9112136/bash-check-if-script-is-being-run-through-a-pipe
 
 set -euo pipefail
+
+# ----------------------------------------------------------------------------
+# DETECTOR: Check if running from a pipe (curl | bash)
+# ----------------------------------------------------------------------------
+# CITATION: ${BASH_SOURCE[0]} is empty or not a regular file when piped
+if [[ ! -f "${BASH_SOURCE[0]}" ]]; then
+    echo "[INFO] Detected pipe execution (curl | bash). Cloning repository to a temporary directory..."
+    
+    # Create a temporary directory
+    TEMP_DIR=$(mktemp -d)
+    # CITATION: git clone – https://git-scm.com/docs/git-clone
+    git clone https://github.com/swipswaps/gdscript-repair.git "$TEMP_DIR"
+    # Change to the temporary directory and re‑run this script (now from a real file)
+    cd "$TEMP_DIR"
+    exec bash install.sh
+    # The exec replaces the current process; code after this line never runs in pipe mode.
+fi
 
 # ----------------------------------------------------------------------------
 # GATE 0: Check that the target directory contains a Godot project
