@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-GDScript Repair Tool for Godot Parachute Game
-Applies safe fixes: camera, canopy scale/animation, arm axis, HUD guard, screenshot disable.
-Dry‑run default; use --apply to write changes.
+Fully automatic GDScript Repair Tool for Godot Parachute Game – FINAL
+- Inserts continuous canopy animation into _physics_process (preserves control flow)
+- Tests arm rotation axis with valid GDScript (Godot 4)
+- Applies camera, scale, HUD, screenshot fixes
+- Dry-run default; use --apply to write changes
 """
 
 import re
@@ -19,9 +21,10 @@ from datetime import datetime
 GD_FILE = Path("scripts/build_terrain.gd")
 BACKUP_SUFFIX = ".backup_auto"
 LOG_FILE = Path(f"repair_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+GODOT_BIN = shutil.which("godot")
 
 # ----------------------------------------------------------------------
-# Helper: log to console and file
+# Logging
 # ----------------------------------------------------------------------
 def log(msg: str, also_print: bool = True):
     if also_print:
@@ -30,18 +33,23 @@ def log(msg: str, also_print: bool = True):
         f.write(msg + "\n")
 
 # ----------------------------------------------------------------------
-# Helper: run gdformat (check or write)
+# Run gdformat (check or write) – show full output
 # ----------------------------------------------------------------------
 def run_gdformat(file_path: Path, apply: bool) -> bool:
     if shutil.which("gdformat") is None:
         log("⚠️  gdformat not installed – skipping indentation normalization.")
         log("   Install with: pip install gdtoolkit")
-        return True  # not fatal
-    cmd = ["gdformat", "--write" if apply else "--check", str(file_path)]
+        return True
+    cmd = ["gdformat"] + ([] if apply else ["--check"]) + [str(file_path)]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True)
+        log(f"gdformat command: {' '.join(cmd)}")
+        if result.stdout:
+            log(f"gdformat stdout:\n{result.stdout}")
+        if result.stderr:
+            log(f"gdformat stderr:\n{result.stderr}")
         if result.returncode != 0:
-            log(f"gdformat {'would reformat' if not apply else 'error'}:\n{result.stderr}")
+            log(f"gdformat {'would reformat' if not apply else 'error'} (code {result.returncode})")
             return False
         if not apply and "would be reformatted" in result.stdout:
             log("📝 gdformat would reformat the file. Run with --apply to fix.")
@@ -51,65 +59,156 @@ def run_gdformat(file_path: Path, apply: bool) -> bool:
         return False
 
 # ----------------------------------------------------------------------
-# Apply all fixes (returns new content and list of applied fixes with details)
+# Test arm axis using headless Godot (returns best axis)
 # ----------------------------------------------------------------------
-def apply_fixes(content: str) -> tuple[str, list[dict]]:
-    fixes = []
-    original = content
+def test_arm_axis() -> str:
+    if GODOT_BIN is None:
+        log("⚠️  Godot binary not found – skipping arm axis test (default FORWARD).")
+        return "FORWARD"
+    test_script = Path("temp_arm_test.gd")
+    # Correct GDScript 4 syntax – no tuple unpacking in for loop
+    test_code = '''extends Node
+func _ready():
+    var fbx = load("res://assets/characters/parachutist.fbx")
+    if not fbx:
+        print("ERROR: FBX not found")
+        return
+    var inst = fbx.instantiate()
+    add_child(inst)
+    await get_tree().process_frame
+    var sk = inst.find_child("Skeleton3D", true, false)
+    if not sk:
+        print("ERROR: No skeleton")
+        return
+    var idx = sk.find_bone("mixamorig:LeftArm")
+    if idx == -1:
+        idx = 8
+    var axes = [Vector3.RIGHT, Vector3.FORWARD, Vector3.UP]
+    var names = ["RIGHT", "FORWARD", "UP"]
+    for i in range(axes.size()):
+        var axis = axes[i]
+        var axis_name = names[i]
+        sk.set_bone_pose_rotation(idx, Quaternion(axis, deg_to_rad(45)))
+        await get_tree().process_frame
+        var euler = sk.get_bone_pose_rotation(idx).get_euler()
+        print("AXIS_TEST", axis_name, euler)
+    get_tree().quit()
+'''
+    test_script.write_text(test_code)
+    try:
+        cmd = [GODOT_BIN, "--headless", "--script", str(test_script)]
+        log(f"Running arm axis test: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            log(f"   Arm axis test failed (code {result.returncode}) – using FORWARD.")
+            log(f"   stderr: {result.stderr}")
+            return "FORWARD"
+        # Parse output
+        for line in result.stdout.splitlines():
+            if "AXIS_TEST FORWARD" in line and "z=0.78" in line:
+                log("   ✅ Arm axis test: FORWARD works (rotation around Z).")
+                return "FORWARD"
+            if "AXIS_TEST UP" in line and "y=0.78" in line:
+                log("   ✅ Arm axis test: UP works (rotation around Y).")
+                return "UP"
+            if "AXIS_TEST RIGHT" in line and "x=0.78" in line:
+                log("   ✅ Arm axis test: RIGHT works (rotation around X).")
+                return "RIGHT"
+        log("   Arm axis test ambiguous – defaulting to FORWARD.")
+        log(f"   Full test output:\n{result.stdout}")
+        return "FORWARD"
+    except Exception as e:
+        log(f"   Arm axis test error: {e} – using FORWARD.")
+        return "FORWARD"
+    finally:
+        test_script.unlink(missing_ok=True)
 
-    # 1. Camera FOV
-    new_content, count = re.subn(r'(\.fov\s*=\s*)\d+(\.?\d*)', r'\g<1>85.0', content)
-    if count:
-        fixes.append({"name": "Camera FOV 85", "pattern": r'\.fov\s*=\s*\d+'})
-        content = new_content
-    # 2. Camera near
-    new_content, count = re.subn(r'(\.near\s*=\s*)\d+(\.?\d*)', r'\g<1>0.05', content)
-    if count:
-        fixes.append({"name": "Camera near 0.05", "pattern": r'\.near\s*=\s*\d+'})
-        content = new_content
-    # 3. Camera far
-    new_content, count = re.subn(r'(\.far\s*=\s*)\d+(\.?\d*)', r'\g<1>20000.0', content)
-    if count:
-        fixes.append({"name": "Camera far 20000", "pattern": r'\.far\s*=\s*\d+'})
-        content = new_content
+# ----------------------------------------------------------------------
+# Apply all fixes (continuous canopy animation inserted, not replacing)
+# ----------------------------------------------------------------------
+def apply_fixes(content: str, best_axis: str) -> tuple[str, list[dict]]:
+    fixes = []
+    # 1-3. Camera FOV, near, far
+    for pattern, repl, name in [
+        (r'(\.fov\s*=\s*)\d+(\.?\d*)', r'\g<1>85.0', "Camera FOV 85"),
+        (r'(\.near\s*=\s*)\d+(\.?\d*)', r'\g<1>0.05', "Camera near 0.05"),
+        (r'(\.far\s*=\s*)\d+(\.?\d*)', r'\g<1>20000.0', "Camera far 20000"),
+    ]:
+        new_content, cnt = re.subn(pattern, repl, content)
+        if cnt:
+            fixes.append({"name": name, "pattern": pattern})
+            content = new_content
+
     # 4. Canopy initial scale
-    new_content, count = re.subn(r'Vector3\s*\(\s*0\.18\s*,\s*0\.12\s*,\s*0\.18\s*\)', 'Vector3(3.0, 2.0, 3.0)', content)
-    if count:
+    new_content, cnt = re.subn(r'Vector3\s*\(\s*0\.18\s*,\s*0\.12\s*,\s*0\.18\s*\)', 'Vector3(3.0, 2.0, 3.0)', content)
+    if cnt:
         fixes.append({"name": "Canopy scale (initial)", "pattern": r'Vector3\(0\.18, 0\.12, 0\.18\)'})
         content = new_content
-    # 5. Canopy deployment scale (ZERO -> 3.0)
-    new_content, count = re.subn(r'_canopy_instance\.scale\s*=\s*Vector3\.ZERO', '_canopy_instance.scale = Vector3(3.0, 2.0, 3.0)', content)
-    if count:
+
+    # 5. Canopy deploy scale (ZERO -> 3.0)
+    new_content, cnt = re.subn(r'_canopy_instance\.scale\s*=\s*Vector3\.ZERO', '_canopy_instance.scale = Vector3(3.0, 2.0, 3.0)', content)
+    if cnt:
         fixes.append({"name": "Canopy scale (deploy)", "pattern": r'_canopy_instance\.scale\s*=\s*Vector3\.ZERO'})
         content = new_content
-    # 6. Insert animation after OPENING_ANIM
-    if re.search(r'_game_state\s*=\s*GameState\.OPENING_ANIM', content) and 'var t = 1.0 -' not in content:
-        anim = '\n\tvar t = 1.0 - (_deployment_timer / DEPLOY_TIME)\n\t_canopy_instance.scale = Vector3(3.0, 2.0, 3.0) * t\n'
-        new_content = re.sub(r'(_game_state\s*=\s*GameState\.OPENING_ANIM)', r'\1' + anim, content)
-        if new_content != content:
-            fixes.append({"name": "Canopy animation inserted", "pattern": r'_game_state\s*=\s*GameState\.OPENING_ANIM'})
-            content = new_content
-    # 7. Arm axis RIGHT -> FORWARD
-    new_content, count = re.subn(r'Quaternion\s*\(\s*Vector3\.RIGHT\s*,\s*angle\s*\)', 'Quaternion(Vector3.FORWARD, angle)', content)
-    if count:
-        fixes.append({"name": "Arm axis RIGHT→FORWARD", "pattern": r'Quaternion\(Vector3\.RIGHT, angle\)'})
+
+    # 6. Remove any previously inserted one‑time animation from _deploy_canopy
+    content = re.sub(r'var t = 1\.0 - \(_deployment_timer / DEPLOY_TIME\)\s*\n\s*_canopy_instance\.scale = Vector3\(3\.0, 2\.0, 3\.0\) \* t\s*\n', '', content)
+
+    # 7. Insert continuous animation into _physics_process BEFORE the FREEFALL if line
+    # Find the line "if _game_state == GameState.FREEFALL:" and capture its indentation
+    lines = content.splitlines(keepends=True)
+    new_lines = []
+    insertion_done = False
+    for i, line in enumerate(lines):
+        stripped = line.lstrip()
+        if not insertion_done and stripped.startswith("if _game_state == GameState.FREEFALL:"):
+            # Capture indentation of this line
+            indent = line[:len(line)-len(stripped)]
+            # Insert animation block before this line
+            anim_block = (
+                f"{indent}# Canopy opening animation (continuous)\n"
+                f"{indent}if _game_state == GameState.OPENING_ANIM and _deployment_timer > 0:\n"
+                f"{indent}    var t = 1.0 - (_deployment_timer / DEPLOY_TIME)\n"
+                f"{indent}    _canopy_instance.scale = Vector3(3.0, 2.0, 3.0) * t\n"
+                f"{indent}\n"
+            )
+            new_lines.append(anim_block)
+            insertion_done = True
+        new_lines.append(line)
+    if insertion_done:
+        content = "".join(new_lines)
+        fixes.append({"name": "Canopy animation inserted into _physics_process", "pattern": "continuous animation"})
+    else:
+        # Fallback: try simple insertion after _update_canopy_tilt()
+        content = re.sub(r'(_update_canopy_tilt\(\))', r'\1\n\t# Canopy opening animation (continuous)\n\tif _game_state == GameState.OPENING_ANIM and _deployment_timer > 0:\n\t    var t = 1.0 - (_deployment_timer / DEPLOY_TIME)\n\t    _canopy_instance.scale = Vector3(3.0, 2.0, 3.0) * t\n', content)
+        fixes.append({"name": "Canopy animation inserted (fallback)", "pattern": "fallback insertion"})
+
+    # 8. Arm axis
+    axis_map = {"RIGHT": "Vector3.RIGHT", "FORWARD": "Vector3.FORWARD", "UP": "Vector3.UP"}
+    new_axis = axis_map.get(best_axis, "Vector3.FORWARD")
+    pattern_axis = r'Quaternion\s*\(\s*Vector3\.\w+\s*,\s*angle\s*\)'
+    new_content, cnt = re.subn(pattern_axis, f'Quaternion({new_axis}, angle)', content)
+    if cnt:
+        fixes.append({"name": f"Arm axis set to {best_axis}", "pattern": pattern_axis})
         content = new_content
-    # 8. Disable frame‑2 screenshot
-    new_content, count = re.subn(r'if\s+_frame_count\s*==\s*2:', 'if false:  # disabled (audit_logs path may not exist)', content)
-    if count:
+
+    # 9. Disable frame‑2 screenshot
+    new_content, cnt = re.subn(r'if\s+_frame_count\s*==\s*2:', 'if false:  # disabled (audit_logs path may not exist)', content)
+    if cnt:
         fixes.append({"name": "Frame‑2 screenshot disabled", "pattern": r'if\s+_frame_count\s*==\s*2:'})
         content = new_content
-    # 9. HUD guard – remove early return (preserve indentation)
+
+    # 10. HUD guard – remove early return (preserve indentation)
     pattern = r'(if\s+_hud_layer:\s*\n\s*)return'
     replacement = r'\1# HUD guard disabled – HUD will be recreated if needed\n\tpass'
-    new_content, count = re.subn(pattern, replacement, content)
-    if count:
-        fixes.append({"name": "HUD guard early return removed", "pattern": r'if\s+_hud_layer:\s*\n\s*return'})
+    new_content, cnt = re.subn(pattern, replacement, content)
+    if cnt:
+        fixes.append({"name": "HUD guard early return removed", "pattern": pattern})
         content = new_content
     else:
         new_content = re.sub(r'if\s+_hud_layer:\s*\n\s*return', '# HUD guard removed (was early return)', content)
         if new_content != content:
-            fixes.append({"name": "HUD guard early return removed (fallback)", "pattern": r'if\s+_hud_layer:\s*\n\s*return'})
+            fixes.append({"name": "HUD guard early return removed (fallback)", "pattern": pattern})
             content = new_content
 
     return content, fixes
@@ -133,21 +232,30 @@ def show_diff(original: str, modified: str):
 # ----------------------------------------------------------------------
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Apply safe fixes to build_terrain.gd")
+    parser = argparse.ArgumentParser(description="Fully automatic repair for build_terrain.gd")
     parser.add_argument("--apply", action="store_true", help="Actually write changes (default dry‑run)")
     parser.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
+    parser.add_argument("--skip-arm-test", action="store_true", help="Skip automatic arm axis test (uses FORWARD)")
     args = parser.parse_args()
 
     if not GD_FILE.exists():
         log(f"❌ {GD_FILE} not found. Run from godot_project directory.")
         sys.exit(1)
 
-    log("\n🎮 GDScript Repair Tool\n")
+    log("\n🎮 Fully Automatic GDScript Repair Tool (FINAL)\n")
     if not args.apply:
         log("🔍 DRY RUN MODE – use --apply to write changes\n")
 
+    # Step 1: Test arm axis
+    best_axis = "FORWARD"
+    if not args.skip_arm_test:
+        log("\n🦾 Testing arm rotation axis (headless Godot)...")
+        best_axis = test_arm_axis()
+    else:
+        log("\n⏩ Skipped arm axis test (using FORWARD).")
+
     original = GD_FILE.read_text(encoding='utf-8')
-    new_content, fixes = apply_fixes(original)
+    new_content, fixes = apply_fixes(original, best_axis)
 
     if not fixes:
         log("✅ No fixes needed.")
@@ -179,14 +287,14 @@ def main():
 
     log("\n🔄 Running gdformat to normalise indentation...")
     if run_gdformat(GD_FILE, apply=True):
-        log("✅ Indentation normalised.")
+        log("✅ Indentation normalised (gdformat succeeded).")
     else:
         log("⚠️  gdformat failed – you may need to run it manually later.")
 
     if shutil.which("gdparse"):
         result = subprocess.run(["gdparse", str(GD_FILE)], capture_output=True, text=True)
         if result.returncode == 0:
-            log("✅ Syntax check passed.")
+            log("✅ Syntax check passed (gdparse exit 0).")
         else:
             log(f"❌ Syntax error after fixes:\n{result.stderr}")
             log("Restoring backup...")
